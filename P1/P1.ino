@@ -7,14 +7,14 @@ PRACTICA 1: IMPLEMENTACION DE UN CONTROLADOR PARA UN MOTOR DE DC
 #include <math.h>
 // ACTIVACION DE CODIGO
 
-#define NOMBRE_PRAC "P1-A"
+#define NOMBRE_PRAC "P1-B"
 #define VERSION_SW "1.0"
 
 #define ACTIVA_P1A
-#define DEBUG_P1A
-// #define ACTIVA_P1B1
-// #define ACTIVA_P1B2
-// #define ACTIVA_P1B3
+// #define DEBUG_P1A
+#define ACTIVA_P1B1
+#define ACTIVA_P1B2
+#define ACTIVA_P1B3
 // #define ACTIVA_P1C
 // #define DEBUG_P1C
 // #define ACTIVA_P1C_MED_ANG
@@ -32,7 +32,7 @@ PRACTICA 1: IMPLEMENTACION DE UN CONTROLADOR PARA UN MOTOR DE DC
 #define TAM_MSG_I 1 /*num caracteres por mensaje*/
 
 // TIEMPOS
-#define BLOQUEO_TAREA_LOOPCONTR_MS 10 
+#define BLOQUEO_TAREA_LOOPCONTR_MS 100 
 #define BLOQUEO_TAREA_MEDIDA_MS 1000
 
 // Configuración PWM  ////////////////////////////////////////////////////////////////////
@@ -62,8 +62,8 @@ const uint8_t B_enc_pin = 34;
 void config_sp(); // Configuracion puerto serie
 void config_oled(); // Configuracion OLED
 void config_enc(); // Configuracion del encoder
-//void config_PWM(); // Configuracion PWM
-//void excita_motor(float v_motor); // Excitacion motor con PWM
+void config_PWM(); // Configuracion PWM
+void excita_motor(float v_motor); // Excitacion motor con PWM
 //float interpola_vel_vol_lut(float x); // Interpolacion velocidad/voltios LUT
 
 // TABLA VELOCIDAD-VOLTAJE P1D
@@ -77,8 +77,8 @@ const float Vel_LUT[LONG_LUT] = {0, 0, ...};
 
 // Variables globales ////////////////////////////////////////////////////////////////////
 int32_t ang_cnt = 0;
-//float pwm_volt = 0;
-//int32_t pwm_motor = 0;
+float pwm_volt = 0;
+int32_t pwm_motor = 0;
 //int32_t sign_v_ant = 0;
 //float v_medida = 0;    // Valor medido de angulo o velocidad -----------------
 //float ref_val = 0;     // Valor de referencia de angulo o velocidad
@@ -168,17 +168,19 @@ Tarea de configuración de parámetros  ########################################
 */
 void task_config(void *pvParameter) {
 	char ini_char = '0';
-
 	while(1) { 
+    ini_char = Serial.read();
 		// Detectar caracter enviado
-
-		// Guardar valor recibido
-
+    if(ini_char=='V') {
+    // Guardar valor recibido
+    pwm_volt = float(Serial.parseFloat());
 		// Escribir el valor recibido en la consola
-
+    Serial.print("Voltaje motor= ");
+    Serial.println(pwm_volt);
+    }
 
 		// Activacion de la tarea cada 0.1s
-		// vTaskDelay(100 / portTICK_PERIOD_MS);
+		vTaskDelay(100 / portTICK_PERIOD_MS);
 	}
 }
 
@@ -191,9 +193,9 @@ void task_loopcontr(void* arg) {
 	while(1) {
 		
 		// Excitacion del motor con PWM
-		
+		excita_motor(pwm_volt);
 		// Activacion de la tarea cada 0.01s
-	
+		vTaskDelay(100 / portTICK_PERIOD_MS);
 	}
 }
 #endif
@@ -230,7 +232,7 @@ void setup() {
 	config_oled();
 
 	// Configuracion PWM
-
+  config_PWM();
 
 	// Crear cola_enc
 	cola_enc = xQueueCreate(TAM_COLA_I, TAM_MSG_I);
@@ -246,10 +248,16 @@ void setup() {
 	}
 
 	// Crear la tarea task_config
-
+  if(xTaskCreate( task_config, "task_config", 2048, NULL, 1, NULL) != pdPASS) {
+	 	Serial.println("Error en creacion tarea task_config");
+	 	exit(-1);
+	}
 
 	// Crear la tarea task_loopcontr
-
+  if(xTaskCreate( task_loopcontr, "task_loopcontr", 2048, NULL, 1, NULL) != pdPASS) {
+	 	Serial.println("Error en creacion tarea task_loopcontr");
+	 	exit(-1);
+	}
 
 	#ifdef DEBUG_P1C
 		// Crear la tarea task_medidas
@@ -286,10 +294,12 @@ void config_enc(){
 #ifdef ACTIVA_P1B2
 void config_PWM(){
 	// Configuracion de pines de control PWM
-
+  pinMode(PWM_f, OUTPUT);
+  pinMode(PWM_r, OUTPUT);
 	// Configuracion LED PWM 
-
+  ledcSetup(pwmChannel,pwmfreq,pwmresolution);
 	// Asignar el controlador PWM al GPIO
+  ledcAttachPin(PWM_Pin, 0);
 
 }  
 #endif
@@ -300,13 +310,33 @@ void config_PWM(){
 #ifdef ACTIVA_P1B3
 void excita_motor(float v_motor){
 	// Sentido de giro del motor
+  float v_motor_ant = 0;
+  if((v_motor_ant < 0 && v_motor > 0) || (v_motor_ant > 0 && v_motor < 0)) {
+    digitalWrite(PWM_f, LOW);
+    digitalWrite(PWM_r, LOW);
+    v_motor_ant = v_motor;
+    Serial.println("Cambiando sentido de giro");
+  }
 
+  if(v_motor > 0) {
+    digitalWrite(PWM_f, HIGH);
+    digitalWrite(PWM_r, LOW);
+    Serial.println("Delante");
+  }
+  else {
+    digitalWrite(PWM_f, LOW);
+    digitalWrite(PWM_r, HIGH);
+    Serial.println("Atras");
+  }
 	// Calcula y limita el valor de configuración del PWM
-
+  if(abs(v_motor) > 12) {
+    v_motor = 12;
+  }
 	// El valor de excitación debe estar entro 0 y PWM_Max
-				
-	// Excitacion del motor con PWM
+  pwm_motor = (PWM_Max * abs(v_motor))/12;
 	
+	// Excitacion del motor con PWM
+	ledcWrite(0, pwm_motor);
 }  
 #endif
 
