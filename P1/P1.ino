@@ -7,7 +7,7 @@ PRACTICA 1: IMPLEMENTACION DE UN CONTROLADOR PARA UN MOTOR DE DC
 #include <math.h>
 // ACTIVACION DE CODIGO
 
-#define NOMBRE_PRAC "P1-B"
+#define NOMBRE_PRAC "P1-C"
 #define VERSION_SW "1.0"
 
 #define ACTIVA_P1A
@@ -15,8 +15,8 @@ PRACTICA 1: IMPLEMENTACION DE UN CONTROLADOR PARA UN MOTOR DE DC
 #define ACTIVA_P1B1
 #define ACTIVA_P1B2
 #define ACTIVA_P1B3
-// #define ACTIVA_P1C
-// #define DEBUG_P1C
+#define ACTIVA_P1C
+#define DEBUG_P1C
 // #define ACTIVA_P1C_MED_ANG
 // #define ACTIVA_P1D2
 // #define ACTIVA_P1D3
@@ -80,7 +80,7 @@ int32_t ang_cnt = 0;
 float pwm_volt = 0;
 int32_t pwm_motor = 0;
 //int32_t sign_v_ant = 0;
-//float v_medida = 0;    // Valor medido de angulo o velocidad -----------------
+float v_medida = 0;    // Valor medido de angulo o velocidad -----------------
 //float ref_val = 0;     // Valor de referencia de angulo o velocidad
 //int8_t start_stop = 0; //1 -> en funcionamiento | 0 -> parado 
 //float K_p = ;
@@ -187,15 +187,24 @@ void task_config(void *pvParameter) {
 /* 
 Tarea del lazo principal del controlador  #####################################################################
 */
+float v_medida_anterior = 0;
 #ifdef ACTIVA_P1B3
 void task_loopcontr(void* arg) {
-
 	while(1) {
-		
 		// Excitacion del motor con PWM
 		excita_motor(pwm_volt);
+    float v_medida_nuevo = ang_cnt*(2*PI/1200);
+    #ifdef ACTIVA_P1C_MED_ANG // Medida de angulo
+
+		#else // Medida de velocidad
+
+      v_medida = (v_medida_nuevo-v_medida_anterior) / 0.01; //rad/s
+      v_medida = v_medida / (2*PI); //rps
+
+      v_medida_anterior = v_medida_nuevo;
+		#endif
 		// Activacion de la tarea cada 0.01s
-		vTaskDelay(100 / portTICK_PERIOD_MS);
+		vTaskDelay(10 / portTICK_PERIOD_MS);
 	}
 }
 #endif
@@ -211,11 +220,16 @@ void task_medidas(void* arg)
 		// Mostrar medidas de angulo y velocidad del motor
 		#ifdef ACTIVA_P1C_MED_ANG // Medida de angulo
 
+      v_medida = v_medida * 180/PI;
+      Serial.print("Med: ");
+      Serial.println(v_medida);
 		#else // Medida de velocidad
-
+      Serial.print("Med: ");
+      Serial.println(v_medida);
 		#endif
 
 		// Activacion de la tarea cada 1s
+		vTaskDelay(BLOQUEO_TAREA_MEDIDA_MS / portTICK_PERIOD_MS);
 
 	}
 }
@@ -261,6 +275,10 @@ void setup() {
 
 	#ifdef DEBUG_P1C
 		// Crear la tarea task_medidas
+    if(xTaskCreate( task_medidas, "task_medidas", 2048, NULL, 1, NULL) != pdPASS) {
+	 	Serial.println("Error en creacion tarea task_medidas");
+	 	exit(-1);
+	}
 
 	#endif
 
@@ -321,12 +339,10 @@ void excita_motor(float v_motor){
   if(v_motor > 0) {
     digitalWrite(PWM_f, HIGH);
     digitalWrite(PWM_r, LOW);
-    Serial.println("Delante");
   }
   else {
     digitalWrite(PWM_f, LOW);
     digitalWrite(PWM_r, HIGH);
-    Serial.println("Atras");
   }
 	// Calcula y limita el valor de configuración del PWM
   if(abs(v_motor) > 12) {
