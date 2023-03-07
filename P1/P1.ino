@@ -7,7 +7,7 @@ PRACTICA 1: IMPLEMENTACION DE UN CONTROLADOR PARA UN MOTOR DE DC
 #include <math.h>
 // ACTIVACION DE CODIGO
 
-#define NOMBRE_PRAC "P1-C"
+#define NOMBRE_PRAC "P1-D"
 #define VERSION_SW "1.0"
 
 #define ACTIVA_P1A
@@ -19,7 +19,7 @@ PRACTICA 1: IMPLEMENTACION DE UN CONTROLADOR PARA UN MOTOR DE DC
 #define DEBUG_P1C
 // #define ACTIVA_P1C_MED_ANG
 // #define ACTIVA_P1D2
-// #define ACTIVA_P1D3
+#define ACTIVA_P1D3
 
 // Display OLED ///////////////////////////////////////////////////////////////////////////
 #include <Adafruit_SSD1306.h>
@@ -33,7 +33,7 @@ PRACTICA 1: IMPLEMENTACION DE UN CONTROLADOR PARA UN MOTOR DE DC
 
 // TIEMPOS
 #define BLOQUEO_TAREA_LOOPCONTR_MS 100 
-#define BLOQUEO_TAREA_MEDIDA_MS 1000
+#define BLOQUEO_TAREA_MEDIDA_MS 10
 
 // Configuración PWM  ////////////////////////////////////////////////////////////////////
 uint32_t pwmfreq = 1000; // 1KHz
@@ -70,9 +70,9 @@ void excita_motor(float v_motor); // Excitacion motor con PWM
 #ifdef ACTIVA_P1D2
 #define LONG_LUT 12
 //Vector de tensiones
-const float Vol_LUT[LONG_LUT] = {0, , , 2, 3, 4, 5, 6, 7, 8, 9, 100};
+const float Vol_LUT[LONG_LUT] = {0, 1.5, 1.9, 2, 3, 4, 5, 6, 7, 8, 9, 100};
 // Vector de velocidades
-const float Vel_LUT[LONG_LUT] = {0, 0, ...};
+const float Vel_LUT[LONG_LUT] = {0, 0, 1, 1.17, 3.5, 5.33, 6.58, 7.5, 8, 8.5, 8.75, 9.16};
 #endif
 
 // Variables globales ////////////////////////////////////////////////////////////////////
@@ -81,9 +81,9 @@ float pwm_volt = 0;
 int32_t pwm_motor = 0;
 //int32_t sign_v_ant = 0;
 float v_medida = 0;    // Valor medido de angulo o velocidad -----------------
-//float ref_val = 0;     // Valor de referencia de angulo o velocidad
-//int8_t start_stop = 0; //1 -> en funcionamiento | 0 -> parado 
-//float K_p = ;
+float ref_val = 0;     // Valor de referencia de angulo o velocidad
+int8_t start_stop = 0; //1 -> en funcionamiento | 0 -> parado 
+float K_p = 0.03; 
 
 // Declaracion objetos  ////////////////////////////////////////////////////////////////////
 
@@ -171,12 +171,36 @@ void task_config(void *pvParameter) {
 	while(1) { 
     ini_char = Serial.read();
 		// Detectar caracter enviado
-    if(ini_char=='V') {
+    if(ini_char == 'V') {
     // Guardar valor recibido
     pwm_volt = float(Serial.parseFloat());
 		// Escribir el valor recibido en la consola
     Serial.print("Voltaje motor= ");
     Serial.println(pwm_volt);
+    }
+    else if(ini_char == 'R') {
+      ref_val = float(Serial.parseFloat());
+      #ifdef ACTIVA_P1C_MED_ANG // Medida de angulo
+
+      Serial.print("Valor de referencia= ");
+      Serial.print(ref_val);
+      Serial.println(" rps");
+
+      #endif
+    }
+    else if(ini_char == 'S') {
+      start_stop = int(Serial.parseInt());
+      if(start_stop == 1) {
+        Serial.println("--START--");
+      }
+      else {
+        Serial.println("--STOP--");
+      }
+    }
+    else if(ini_char == 'P') {
+      K_p = float(Serial.parseFloat());
+      Serial.print("K_p= ");
+      Serial.println(K_p);
     }
 
 		// Activacion de la tarea cada 0.1s
@@ -192,17 +216,48 @@ float v_medida_anterior = 0;
 void task_loopcontr(void* arg) {
 	while(1) {
 		// Excitacion del motor con PWM
-		excita_motor(pwm_volt);
-    float v_medida_nuevo = ang_cnt*(2*PI/1200);
-    #ifdef ACTIVA_P1C_MED_ANG // Medida de angulo
+		if(start_stop == 1){
+      excita_motor(pwm_volt);
+      float v_medida_nuevo = ang_cnt*(2*PI/1200);
+      float error = ref_val - v_medida;
 
-		#else // Medida de velocidad
+      #ifdef ACTIVA_P1C_MED_ANG // Medida de angulo
 
-      v_medida = (v_medida_nuevo-v_medida_anterior) / 0.01; //rad/s
-      v_medida = v_medida / (2*PI); //rps
+		  #else // Medida de velocidad
 
-      v_medida_anterior = v_medida_nuevo;
-		#endif
+        v_medida = (v_medida_nuevo-v_medida_anterior) / 0.01; //rad/s
+        v_medida = v_medida / (2*PI); //rps
+
+        v_medida_anterior = v_medida_nuevo;
+		  #endif
+
+      #ifdef ACTIVA_P1D2
+
+        pwm_volt = interpola_vel_vol_lut(ref_val);
+
+      #endif
+
+      #ifdef ACTIVA_P1D3
+
+      if(error > 0) {
+        pwm_volt = pwm_volt + K_p;
+      }
+      else if (error < 0) {
+        pwm_volt = pwm_volt - K_p;
+      }
+      else {
+        pwm_volt = pwm_volt;
+      }
+        
+      #endif
+    }
+    else {
+      excita_motor(0);
+      ang_cnt = 0;
+      pwm_motor = 0;
+      v_medida = 0;
+      v_medida_anterior = 0;
+    }
 		// Activacion de la tarea cada 0.01s
 		vTaskDelay(10 / portTICK_PERIOD_MS);
 	}
@@ -217,16 +272,21 @@ void task_medidas(void* arg)
 {
 
 	while(1) { 
-		// Mostrar medidas de angulo y velocidad del motor
-		#ifdef ACTIVA_P1C_MED_ANG // Medida de angulo
+		if(start_stop == 1) {
+      // Mostrar medidas de angulo y velocidad del motor
+		  #ifdef ACTIVA_P1C_MED_ANG // Medida de angulo
 
-      v_medida = v_medida * 180/PI;
-      Serial.print("Med: ");
-      Serial.println(v_medida);
-		#else // Medida de velocidad
-      Serial.print("Med: ");
-      Serial.println(v_medida);
-		#endif
+        v_medida = v_medida * 180/PI;
+        Serial.print("Med:");
+        Serial.println(v_medida);
+		  #else // Medida de velocidad
+        Serial.print("Med:");
+        Serial.print(v_medida);
+
+        Serial.print(",Ref:");
+        Serial.println(ref_val);
+		  #endif
+    }
 
 		// Activacion de la tarea cada 1s
 		vTaskDelay(BLOQUEO_TAREA_MEDIDA_MS / portTICK_PERIOD_MS);
