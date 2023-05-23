@@ -7,7 +7,7 @@ PRACTICA 1: IMPLEMENTACION DE UN CONTROLADOR PARA UN MOTOR DE DC
 #include <math.h>
 // ACTIVACION DE CODIGO
 
-#define NOMBRE_PRAC "P1-FINAL-1"
+#define NOMBRE_PRAC "P1-FINAL-2"
 #define VERSION_SW "1.0"
 
 
@@ -18,7 +18,6 @@ PRACTICA 1: IMPLEMENTACION DE UN CONTROLADOR PARA UN MOTOR DE DC
 #define ACTIVA_P1B3
 #define ACTIVA_P1C
 #define DEBUG_P1C
-// #define ACTIVA_P1C_MED_ANG
 // #define ACTIVA_P1D2
 #define ACTIVA_P1D3
 
@@ -37,7 +36,7 @@ PRACTICA 1: IMPLEMENTACION DE UN CONTROLADOR PARA UN MOTOR DE DC
 
 // TIEMPOS
 #define BLOQUEO_TAREA_LOOPCONTR_MS 10
-#define BLOQUEO_TAREA_MEDIDA_MS 10
+#define BLOQUEO_TAREA_MEDIDA_MS 100
 
 // Configuración PWM  ////////////////////////////////////////////////////////////////////
 uint32_t pwmfreq = 1000; // 1KHz
@@ -87,13 +86,13 @@ int32_t pwm_motor = 0;
 float v_medida = 0;    // Valor medido de angulo o velocidad -----------------
 float ref_val = 0;     // Valor de referencia de angulo o velocidad
 int8_t start_stop = 0; //1 -> en funcionamiento | 0 -> parado 
-float K_p = 3.833; //3,833
-float T_i = 560; //560
-float T_d = 0.0000002; //0.002
+float K_p = 3.833; //3,833 velocidad : 1,2 ANGULO
+float T_i = 560; //560 : 10 ANGULO
+float T_d = 0.002; //0.002 : 0.05 ANGULO
 float K_i = K_p / T_i;
 float K_d = K_p * T_d;
 
-
+bool angulo = false;
 
 // Declaracion objetos  ////////////////////////////////////////////////////////////////////
 
@@ -188,15 +187,30 @@ void task_config(void *pvParameter) {
     Serial.print("Voltaje motor= ");
     Serial.println(pwm_volt);
     }
+    else if(ini_char == 'A') {
+    // Guardar valor recibido
+      ref_val = float(Serial.parseFloat());
+      Serial.print("Valor de referencia= ");
+      Serial.print(ref_val);
+      Serial.println(" º");
+      if(!angulo) {
+        K_p = 1.2;
+        T_i = 1;
+        T_d = 0.008;
+        angulo = true;
+      }
+    }
     else if(ini_char == 'R') {
       ref_val = float(Serial.parseFloat());
-      #ifdef ACTIVA_P1C_MED_ANG // Medida de angulo
-
       Serial.print("Valor de referencia= ");
       Serial.print(ref_val);
       Serial.println(" rps");
-
-      #endif
+      if(angulo) {
+        K_p = 3.833;
+        T_i = 560;
+        T_d = 0.002;
+        angulo = false;
+      }
     }
     else if(ini_char == 'S') {
       start_stop = int(Serial.parseInt());
@@ -211,6 +225,18 @@ void task_config(void *pvParameter) {
       K_p = float(Serial.parseFloat());
       Serial.print("K_p= ");
       Serial.println(K_p);
+    }
+    else if(ini_char == 'I') {
+      T_i = float(Serial.parseFloat());
+      Serial.print("T_i= ");
+      Serial.println(T_i);
+      K_i = K_p / T_i;
+    }
+    else if(ini_char == 'D') {
+      T_d = float(Serial.parseFloat());
+      Serial.print("T_d= ");
+      Serial.println(T_d);
+      K_d = K_p * T_d;
     }
 
 		// Activacion de la tarea cada 0.1s
@@ -230,17 +256,24 @@ void task_loopcontr(void* arg) {
     while(1) {
       if(start_stop == 1){
         float v_medida_nuevo = ang_cnt*(2*PI/1200);
-        
-        v_medida = (v_medida_nuevo-v_medida_anterior) / 0.01; //rad/s
-        v_medida = v_medida / (2*PI); //rps
+        float error = 0;
 
-        v_medida_anterior = v_medida_nuevo;
+        if(angulo) {
+          v_medida = v_medida_nuevo; //rad
+          v_medida_anterior = v_medida_nuevo;
 
-        float error = ref_val - v_medida;
+          error = ref_val - (v_medida * (180/PI));
+        }
+        else {
+          v_medida = (v_medida_nuevo-v_medida_anterior) / 0.01; //rad/s
+          v_medida = v_medida / (2*PI); //rps
 
+          v_medida_anterior = v_medida_nuevo;
+          error = ref_val - v_medida;
+        }
         float vp = K_p * error;
-        float vi = vi_ant + K_i * BLOQUEO_TAREA_LOOPCONTR_MS * error;
-        float vd = K_d/BLOQUEO_TAREA_LOOPCONTR_MS * (error - error_ant);
+        float vi = vi_ant + K_i * (BLOQUEO_TAREA_LOOPCONTR_MS/1000.0) * error;
+        float vd = K_d/(BLOQUEO_TAREA_LOOPCONTR_MS/1000.0) * (error - error_ant);
 
         float v = vp + vi + vd;
         vi_ant = vi;
@@ -324,20 +357,21 @@ void task_medidas(void* arg)
 	while(1) { 
 		if(start_stop == 1) {
       // Mostrar medidas de angulo y velocidad del motor
-		  #ifdef ACTIVA_P1C_MED_ANG // Medida de angulo
+        if(angulo) {
+          float v_medida_rad = v_medida * (180/PI);
+          Serial.print("Med:");
+          Serial.print(v_medida_rad);
+          Serial.print(",Ref:");
+          Serial.println(ref_val);
+		    } 
+        else { // Medida de velocidad
+          Serial.print("Med:");
+          Serial.print(v_medida);
 
-        v_medida = v_medida * 180/PI;
-        Serial.print("Med:");
-        Serial.println(v_medida);
-		  #else // Medida de velocidad
-        Serial.print("Med:");
-        Serial.print(v_medida);
-
-        Serial.print(",Ref:");
-        Serial.println(ref_val);
-		  #endif
+          Serial.print(",Ref:");
+          Serial.println(ref_val);
+        }
     }
-
 		// Activacion de la tarea cada 1s
 		vTaskDelay(BLOQUEO_TAREA_MEDIDA_MS / portTICK_PERIOD_MS);
 
