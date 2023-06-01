@@ -7,7 +7,7 @@ PRACTICA 1: IMPLEMENTACION DE UN CONTROLADOR PARA UN MOTOR DE DC
 #include <math.h>
 // ACTIVACION DE CODIGO
 
-#define NOMBRE_PRAC "P1-FINAL-2"
+#define NOMBRE_PRAC "P1-FINAL-5"
 #define VERSION_SW "1.0"
 
 
@@ -87,12 +87,19 @@ float v_medida = 0;    // Valor medido de angulo o velocidad -----------------
 float ref_val = 0;     // Valor de referencia de angulo o velocidad
 int8_t start_stop = 0; //1 -> en funcionamiento | 0 -> parado 
 float K_p = 3.833; //3,833 velocidad : 1,2 ANGULO
-float T_i = 560; //560 : 10 ANGULO
+float T_i = 1; //1 : 10 ANGULO
 float T_d = 0.002; //0.002 : 0.05 ANGULO
 float K_i = K_p / T_i;
 float K_d = K_p * T_d;
+float T_cb = 1;
 
 bool angulo = false;
+int windup_recalculo = 0;
+int windup_cond = 0;
+float windup_sat = 9;
+int zona_muerta = 0;
+float deadzone = 1.8;
+float v = 0;
 
 // Declaracion objetos  ////////////////////////////////////////////////////////////////////
 
@@ -110,7 +117,7 @@ int32_t ang_enc;
 void IRAM_ATTR ISR_enc() {
 	// Lee las salidas del Encoder		
 	uint8_t valor_A = digitalRead(A_enc_pin);
-	uint8_t valor_B = digitalRead(B_enc_pin);
+	uint8_t valor_B = digitalRead(B_enc_pin); 
 	// Procesa los datos
 
   uint8_t valor_combinado = 2*valor_A + valor_B;
@@ -195,8 +202,8 @@ void task_config(void *pvParameter) {
       Serial.println(" º");
       if(!angulo) {
         K_p = 1.2;
-        T_i = 1;
-        T_d = 0.008;
+        T_i = 10;
+        T_d = 0.05;
         angulo = true;
       }
     }
@@ -207,7 +214,7 @@ void task_config(void *pvParameter) {
       Serial.println(" rps");
       if(angulo) {
         K_p = 3.833;
-        T_i = 560;
+        T_i = 1;
         T_d = 0.002;
         angulo = false;
       }
@@ -230,13 +237,56 @@ void task_config(void *pvParameter) {
       T_i = float(Serial.parseFloat());
       Serial.print("T_i= ");
       Serial.println(T_i);
-      K_i = K_p / T_i;
+      if(T_i == 0){
+        K_i = 0;
+      }
+      else {
+        K_i = K_p / T_i;
+      }
     }
     else if(ini_char == 'D') {
       T_d = float(Serial.parseFloat());
       Serial.print("T_d= ");
       Serial.println(T_d);
       K_d = K_p * T_d;
+    }
+    else if(ini_char == 'C') {
+      windup_cond = int(Serial.parseInt());
+      if(windup_cond == 1) {
+        Serial.println("---CONDICIONAL---");
+      }
+      else {
+        Serial.println("--NO CONDICIONAL--");
+      }
+    }
+    else if(ini_char == 'W') {
+      windup_recalculo = int(Serial.parseInt());
+      if(windup_recalculo == 1) {
+        Serial.println("---RECALCULO---");
+      }
+      else {
+        Serial.println("--NO RECALCULO--");
+      }
+    }
+    else if(ini_char == 'L') {
+      windup_sat = Serial.parseInt();
+      Serial.print("windup_sat= ");
+      Serial.println(windup_sat);
+    }
+    else if(ini_char == 'B') {
+      T_cb = float(Serial.parseFloat());
+      Serial.print("T_cb= ");
+      Serial.println(T_cb);
+    }
+    else if(ini_char == 'M') {
+      zona_muerta = int(Serial.parseInt());
+      if(zona_muerta == 1) {
+        Serial.println("---ANTI ZONA MUERTA---");
+        //Ti = 15
+      }
+      else {
+        Serial.println("--NO ANTI ZONA MUERTA--");
+      }
     }
 
 		// Activacion de la tarea cada 0.1s
@@ -250,6 +300,8 @@ Tarea del lazo principal del controlador  ######################################
 float v_medida_anterior = 0;
 float vi_ant = 0;
 float error_ant = 0;
+float sat_anterior = 0;
+float resta = 0;
 #ifdef ACTIVA_P1B3
 void task_loopcontr(void* arg) {
   #ifdef ACTIVA_P1FINAL
@@ -271,24 +323,64 @@ void task_loopcontr(void* arg) {
           v_medida_anterior = v_medida_nuevo;
           error = ref_val - v_medida;
         }
+
         float vp = K_p * error;
-        float vi = vi_ant + K_i * (BLOQUEO_TAREA_LOOPCONTR_MS/1000.0) * error;
+        float vi = 0;
+        if(windup_recalculo == 1) {
+        vi = vi_ant + (K_i*error - resta/T_cb)*(BLOQUEO_TAREA_LOOPCONTR_MS/1000.0);
+        }
+        else {
+          vi = vi_ant + K_i * (BLOQUEO_TAREA_LOOPCONTR_MS/1000.0) * error;
+        }
         float vd = K_d/(BLOQUEO_TAREA_LOOPCONTR_MS/1000.0) * (error - error_ant);
 
-        float v = vp + vi + vd;
+        v = vp + vi + vd;
+
+        if(windup_cond == 1) {
+          if(abs(v) > windup_sat) {
+            v = vp + vd;
+          }
+        }
+        else if(windup_recalculo == 1) {
+          if(abs(v) > windup_sat) {
+            if(v>0) {
+              resta = v-windup_sat;
+            }
+            else {
+              resta = v+windup_sat;
+            }
+          }
+          else {
+            resta = 0;
+          }
+        }
+
         vi_ant = vi;
         error_ant = error;
 
+        if(zona_muerta == 1) {
+          if(v>0) {
+            if(v > 0.3) {
+              v = v+deadzone;
+            }
+          }
+          else {
+            if(v<-0.3){
+              v = v-deadzone;
+            }
+          }
+        }
         excita_motor(v);
       }
       else {
-        excita_motor(0);
+        excita_motor(pwm_volt);
         ang_cnt = 0;
         pwm_motor = 0;
         v_medida = 0;
         v_medida_anterior = 0;
         vi_ant = 0;
         error_ant = 0;
+        resta = 0;
       }
 	  	vTaskDelay(BLOQUEO_TAREA_LOOPCONTR_MS / portTICK_PERIOD_MS);
     }
@@ -370,6 +462,8 @@ void task_medidas(void* arg)
 
           Serial.print(",Ref:");
           Serial.println(ref_val);
+          Serial.print(",v:");
+          Serial.println(v);
         }
     }
 		// Activacion de la tarea cada 1s
