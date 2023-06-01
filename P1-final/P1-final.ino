@@ -297,50 +297,70 @@ void task_config(void *pvParameter) {
 /* 
 Tarea del lazo principal del controlador  #####################################################################
 */
-float v_medida_anterior = 0;
-float vi_ant = 0;
-float error_ant = 0;
+float v_medida_anterior = 0; //v[n-1]
+float vi_ant = 0; //vi[n-1]
+float error_ant = 0; //e[n-1]
 float sat_anterior = 0;
 float resta = 0;
 #ifdef ACTIVA_P1B3
 void task_loopcontr(void* arg) {
   #ifdef ACTIVA_P1FINAL
     while(1) {
-      if(start_stop == 1){
+      // S1 en monitor serie
+      if(start_stop == 1) {
+        // Leer valor del motor
         float v_medida_nuevo = ang_cnt*(2*PI/1200);
+        // Error inicial
         float error = 0;
 
         if(angulo) {
           v_medida = v_medida_nuevo; //rad
+
+          // Guardar v[n-1]
           v_medida_anterior = v_medida_nuevo;
 
+          // Cálculo de error
           error = ref_val - (v_medida * (180/PI));
         }
         else {
           v_medida = (v_medida_nuevo-v_medida_anterior) / 0.01; //rad/s
           v_medida = v_medida / (2*PI); //rps
 
+          // Guardar v[n-1]
           v_medida_anterior = v_medida_nuevo;
+
+          // Cálculo de error
           error = ref_val - v_medida;
         }
 
+        // Cálculo de vp[n]
         float vp = K_p * error;
+
+        // Cálculo de vi[n]
         float vi = 0;
+
+        // W1 en monitor serie
         if(windup_recalculo == 1) {
         vi = vi_ant + (K_i*error - resta/T_cb)*(BLOQUEO_TAREA_LOOPCONTR_MS/1000.0);
         }
+        // W0 en monitor serie
         else {
           vi = vi_ant + K_i * (BLOQUEO_TAREA_LOOPCONTR_MS/1000.0) * error;
         }
+
+        // Cálculo de vd[n]
         float vd = K_d/(BLOQUEO_TAREA_LOOPCONTR_MS/1000.0) * (error - error_ant);
 
+        //Cálculo de v[n]
         v = vp + vi + vd;
 
+        // C1 en monitor serie
         if(windup_cond == 1) {
           if(abs(v) > windup_sat) {
             v = vp + vd;
           }
         }
+        // W1 en monitor serie
         else if(windup_recalculo == 1) {
           if(abs(v) > windup_sat) {
             if(v>0) {
@@ -355,9 +375,13 @@ void task_loopcontr(void* arg) {
           }
         }
 
+        // Guardar vi[n-1]
         vi_ant = vi;
+
+        // Guardar e[n-1]
         error_ant = error;
 
+        // M1 en monitor serie
         if(zona_muerta == 1) {
           if(v>0) {
             if(v > 0.3) {
@@ -372,6 +396,8 @@ void task_loopcontr(void* arg) {
         }
         excita_motor(v);
       }
+      // S0 en monitor serie
+      // Solo funcionará cuando se introduzca VX en monitor serie (X=Voltaje)
       else {
         excita_motor(pwm_volt);
         ang_cnt = 0;
@@ -382,11 +408,12 @@ void task_loopcontr(void* arg) {
         error_ant = 0;
         resta = 0;
       }
+      // Activacion de la tarea cada 0.01s
 	  	vTaskDelay(BLOQUEO_TAREA_LOOPCONTR_MS / portTICK_PERIOD_MS);
     }
   #endif
 
-  // Codigo anterior
+  // Codigo anterior (IRRELEVANTE YA QUE ACTIVA_P1 NO ESTÁ DEFINIDO)
   #ifdef ACTIVA_P1
 	  while(1) {
 	  	// Excitacion del motor con PWM
@@ -459,14 +486,11 @@ void task_medidas(void* arg)
         else { // Medida de velocidad
           Serial.print("Med:");
           Serial.print(v_medida);
-
           Serial.print(",Ref:");
           Serial.println(ref_val);
-          Serial.print(",v:");
-          Serial.println(v);
         }
     }
-		// Activacion de la tarea cada 1s
+		// Activacion de la tarea cada 0.1s
 		vTaskDelay(BLOQUEO_TAREA_MEDIDA_MS / portTICK_PERIOD_MS);
 
 	}
